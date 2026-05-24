@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package order.v1;
+
+// go_package 必须指定：生成代码存放的路径；最后的别名
+option go_package = "geek-grpc-cloud/api/order/v1;orderv1";
+
+// 订单服务接口定义
+service OrderService {
+    // 创建订单 (Unary RPC: 单向请求-响应模式)
+    rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
+}
+
+// 核心消息结构
+message CreateOrderRequest {
+    string user_id = 1;       // 字段编号 1：高频字段使用 1-15 的编号
+    int64 product_id = 2;     // 字段编号 2
+    int32 quantity = 3;       // 字段编号 3
+    double price = 4;         // 字段编号 4
+}
+
+message CreateOrderResponse {
+    string order_id = 1;
+    string status = 2;
+    int64 created_at = 3;     // 使用时间戳（Unix Timestamp），避免时区地狱
+}
