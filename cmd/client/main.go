@@ -51,7 +51,7 @@ func main() {
 
 	// 5. 构造契约规定的请求体
 	req := &orderv1.CreateOrderRequest{
-		UserId:    "user_senior_dev_999",
+		UserId:    "panic",
 		ProductId: 88888888,
 		Quantity:  2,
 		Price:     199.99,

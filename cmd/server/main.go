@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -28,6 +31,11 @@ func (s *OrderServer) CreateOrder(_ context.Context, req *orderv1.CreateOrderReq
 	log.Printf("【gRPC 收到订单请求】用户ID: %s, 商品ID: %d, 数量: %d, 单价: %.2f",
 		req.UserId, req.ProductId, req.Quantity, req.Price)
 
+	// 故意埋一个雷：如果用户ID是 "panic"，直接触发崩溃，测试我们的 Recovery 拦截器
+	if req.UserId == "panic" {
+		panic("🔥 模拟严重的运行时数据库连接断开异常！")
+	}
+
 	// 模拟工业级分布式生成全局唯一 ID（如雪花算法 Snowflake）
 	mockOrderID := fmt.Sprintf("ORD-%d-%d", time.Now().UnixNano(), req.ProductId)
 
@@ -37,6 +45,43 @@ func (s *OrderServer) CreateOrder(_ context.Context, req *orderv1.CreateOrderReq
 		Status:    "PAID_SUCCESS",    // 工业实践：使用大写字符串状态机，便于可读与排查
 		CreatedAt: time.Now().Unix(), // 彻底避开时区地狱，落盘秒级 Unix 时间戳
 	}, nil
+}
+
+// 🛠️ 大厂级核心：手写一元服务端拦截器
+func myServerInterceptor() grpc.UnaryServerInterceptor {
+	return func(
+		ctx context.Context,
+		req interface{},
+		info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler,
+	) (resp interface{}, err error) {
+		startTime := time.Now()
+
+		// 1. 模拟分布式全链路追踪：生成一个伪 TraceID
+		mockTraceID := fmt.Sprintf("trace-id-%d", startTime.UnixNano())
+
+		// 2. 统一防御性设计：异常捕获（Recovery）
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[🚨 CRITICAL - TraceID: %s] 捕获到服务崩溃! 错误原因: %v \n 堆栈信息:\n%s",
+					mockTraceID, r, string(debug.Stack()))
+				// 将运行时的 panic 包装为体面的 gRPC 状态码返回给调用方，防止客户端挂起
+				err = status.Errorf(codes.Internal, "Internal server panic caught by interceptor")
+			}
+		}()
+
+		log.Printf("[📥 入向请求 - TraceID: %s] 调用方法: %s", mockTraceID, info.FullMethod)
+
+		// 3. 执行真正的业务逻辑（进入 CreateOrder 方法）
+		resp, err = handler(ctx, req)
+
+		// 4. 统一后置处理：耗时统计与日志审计
+		duration := time.Since(startTime)
+		log.Printf("[📤 出向响应 - TraceID: %s] 方法: %s, 耗时: %v, 是否报错: %v",
+			mockTraceID, info.FullMethod, duration, err != nil)
+
+		return resp, err
+	}
 }
 
 func main() {
@@ -57,6 +102,7 @@ func main() {
 			Time:                  2 * time.Hour,
 			Timeout:               20 * time.Second,
 		}),
+		grpc.UnaryInterceptor(myServerInterceptor()),
 	}
 
 	// 5. 实例化 gRPC 服务端

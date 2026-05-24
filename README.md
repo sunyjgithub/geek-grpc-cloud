@@ -11,3 +11,12 @@ gRPC 的底层是基于 HTTP/2  网络上真正发出的，是一个 HTTP/2 的 
 这个 HTTP/2 请求的 Path（路径） 到底长什么样？它的计算公式是硬编码在 gRPC 规范里的：
 
 protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative api/order/v1/order.proto
+
+
+
+# dockerfile
+切到项目根目录下，执行以下构建命令：
+docker build -t geek-grpc-cloud/order-server:v1.0.0 .
+
+
+末尾有一个英文句号 .，代表以当前目录作为上下文进行构建
