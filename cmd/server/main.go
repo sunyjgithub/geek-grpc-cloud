@@ -1,1 +1,87 @@
-package server
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
+
+	// 🛠️ 严格对齐你的 go.mod 模块名与 api 路径
+	orderv1 "geek-grpc-cloud/api/order/v1"
+)
+
+// OrderServer 1. 定义订单服务结构体
+type OrderServer struct {
+	orderv1.UnimplementedOrderServiceServer
+}
+
+// CreateOrder 2. 完美实现契约定义的 CreateOrder 接口
+func (s *OrderServer) CreateOrder(_ context.Context, req *orderv1.CreateOrderRequest) (*orderv1.CreateOrderResponse, error) {
+	// 🔥 严格对齐契约入参：req.UserId, req.ProductId, req.Quantity, req.Price
+	log.Printf("【gRPC 收到订单请求】用户ID: %s, 商品ID: %d, 数量: %d, 单价: %.2f",
+		req.UserId, req.ProductId, req.Quantity, req.Price)
+
+	// 模拟工业级分布式生成全局唯一 ID（如雪花算法 Snowflake）
+	mockOrderID := fmt.Sprintf("ORD-%d-%d", time.Now().UnixNano(), req.ProductId)
+
+	// 🔥 严格对齐契约出参：OrderId, Status, CreatedAt
+	return &orderv1.CreateOrderResponse{
+		OrderId:   mockOrderID,
+		Status:    "PAID_SUCCESS",    // 工业实践：使用大写字符串状态机，便于可读与排查
+		CreatedAt: time.Now().Unix(), // 彻底避开时区地狱，落盘秒级 Unix 时间戳
+	}, nil
+}
+
+func main() {
+	port := ":50051"
+
+	// 3. 建立物理层面的四层 TCP 监听
+	listen, err := net.Listen("tcp", port)
+	if err != nil {
+		log.Fatalf("Failed to listen TCP port %s: %v", port, err)
+	}
+
+	// 4. 引入 Keepalive 机制，防御云原生多层网络下的僵尸连接
+	opts := []grpc.ServerOption{
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle:     15 * time.Minute,
+			MaxConnectionAge:      30 * time.Minute, // 强制物理长连接轮转，打破大厂 L4 负载均衡（如 LVS）的连接粘性
+			MaxConnectionAgeGrace: 5 * time.Minute,
+			Time:                  2 * time.Hour,
+			Timeout:               20 * time.Second,
+		}),
+	}
+
+	// 5. 实例化 gRPC 服务端
+	grpcServer := grpc.NewServer(opts...)
+
+	// 6. 将严格契约化的业务逻辑注册到 gRPC 运行时中
+	orderv1.RegisterOrderServiceServer(grpcServer, &OrderServer{})
+
+	// 7. 优雅启停（Graceful Shutdown）—— 避免大厂滚动发布时订单断流
+	go func() {
+		log.Printf("🚀 工业级 gRPC 订单微服务已启动，正在监听端口 %s ...", port)
+		if err := grpcServer.Serve(listen); err != nil && err != grpc.ErrServerStopped {
+			log.Fatalf("gRPC server run failed: %v", err)
+		}
+	}()
+
+	// 监听系统退出信号（Ctrl+C, K8s Pod 销毁信号 SIGTERM）
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("⚠️ 收到停机信号，正在触发优雅停机...")
+
+	// 发送 HTTP/2 GOAWAY 帧，拒绝新请求，安全消化积压请求，体面下班
+	grpcServer.GracefulStop()
+
+	log.Println("🛑 订单服务已安全关闭！")
+}
